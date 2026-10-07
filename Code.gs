@@ -325,18 +325,22 @@ function getRegalosDelMes(ss) {
     v.fecha_hora && String(v.fecha_hora).startsWith(mesActual)
   );
 
-  const detalle = conRegalo.map(v => {
-    const acc = accesorios.find(a => String(a.id) === String(v.regalo_accesorio_id));
-    return {
-      fecha_hora: v.fecha_hora,
-      origen: 'venta',
-      imei: v.imei || '',
-      numero_correlativo: v.numero_correlativo || '',
-      nombre_cliente: v.nombre_cliente || '',
-      regalo_accesorio_id: v.regalo_accesorio_id,
-      regalo_nombre: acc ? acc.nombre : 'Desconocido',
-      regalo_costo: acc ? Number(acc.costo || 0) : 0
-    };
+  const detalle = [];
+  conRegalo.forEach(v => {
+    const ids = String(v.regalo_accesorio_id).split(',').map(x => x.trim()).filter(Boolean);
+    ids.forEach(id => {
+      const acc = accesorios.find(a => String(a.id) === String(id));
+      detalle.push({
+        fecha_hora: v.fecha_hora,
+        origen: 'venta',
+        imei: v.imei || '',
+        numero_correlativo: v.numero_correlativo || '',
+        nombre_cliente: v.nombre_cliente || '',
+        regalo_accesorio_id: id,
+        regalo_nombre: acc ? acc.nombre : 'Desconocido',
+        regalo_costo: acc ? Number(acc.costo || 0) : 0
+      });
+    });
   });
 
   const perdidasMes = perdidas.filter(p =>
@@ -566,31 +570,39 @@ function registrarVenta(ss, params) {
   }
 
   let costoTotal = Number(params.costo_total) || 0;
-  const regaloId = params.accesorio_regalo_id || params.regalo_accesorio_id || '';
+  const regaloRaw = params.accesorio_regalo_id || params.regalo_accesorio_id || '';
+  // Acepta uno o varios regalos: array o string "12,15".
+  const regaloIds = (Array.isArray(regaloRaw) ? regaloRaw : String(regaloRaw).split(','))
+    .map(x => String(x).trim())
+    .filter((x, i, arr) => x && arr.indexOf(x) === i);
+  const regaloId = regaloIds.join(',');
 
-  // REGALO DE ACCESORIO en venta de celular:
-  // descuenta 1 unidad del stock, NO suma al valor_venta, y añade su costo al costo_total.
-  if (params.tipo_producto === 'celular' && regaloId) {
+  // REGALO(S) DE ACCESORIO en venta de celular:
+  // descuenta 1 unidad del stock de cada regalo, NO suma al valor_venta,
+  // y añade su costo al costo_total.
+  if (params.tipo_producto === 'celular' && regaloIds.length) {
     const accRows = accSheet.getDataRange().getValues();
-    let accRowIndex = -1;
-    let accStock = 0;
-    let accCosto = 0;
-    let accNombre = '';
-    for (let i = 1; i < accRows.length; i++) {
-      if (String(accRows[i][0]) === String(regaloId)) {
-        accRowIndex = i + 1;
-        accStock = Number(accRows[i][4]);
-        accCosto = Number(accRows[i][2]);
-        accNombre = String(accRows[i][1]);
-        break;
-      }
+    const filaPorId = {};
+    for (let i = 1; i < accRows.length; i++) filaPorId[String(accRows[i][0])] = i + 1;
+
+    const noEncontrados = regaloIds.filter(id => !filaPorId[id]);
+    if (noEncontrados.length) throw new Error('El accesorio de regalo no fue encontrado: ' + noEncontrados.join(', '));
+
+    const sinStock = regaloIds.filter(id => Number(accRows[filaPorId[id] - 1][4] || 0) < 1);
+    if (sinStock.length) throw new Error('No hay stock disponible del accesorio seleccionado para regalar.');
+
+    const nombresRegalo = [];
+    for (let k = 0; k < regaloIds.length; k++) {
+      const fila = filaPorId[regaloIds[k]];
+      const accStock = Number(accRows[fila - 1][4] || 0);
+      const accCosto = Number(accRows[fila - 1][2] || 0);
+      const accNombre = String(accRows[fila - 1][1]);
+      accSheet.getRange(fila, 5).setValue(accStock - 1);
+      accSheet.getRange(fila, 6).setValue(fechaHora);
+      costoTotal = costoTotal + accCosto;
+      nombresRegalo.push(accNombre);
     }
-    if (accRowIndex === -1) throw new Error('El accesorio de regalo no fue encontrado.');
-    if (accStock < 1) throw new Error('No hay stock disponible del accesorio seleccionado para regalar.');
-    accSheet.getRange(accRowIndex, 5).setValue(accStock - 1);
-    accSheet.getRange(accRowIndex, 6).setValue(fechaHora);
-    costoTotal = costoTotal + accCosto;
-    const detalleRegalo = 'Regalo: ' + accNombre;
+    const detalleRegalo = 'Regalo: ' + nombresRegalo.join(', ');
     params.nota = params.nota ? params.nota + ' | ' + detalleRegalo : detalleRegalo;
   }
 
@@ -725,12 +737,15 @@ function anularVenta(ss, ventaId, userId) {
   if (venta.regalo_accesorio_id) {
     const accSheet = ss.getSheetByName('Accesorios');
     const aRows = accSheet.getDataRange().getValues();
-    for (let i = 1; i < aRows.length; i++) {
-      if (String(aRows[i][0]) === String(venta.regalo_accesorio_id)) {
-        accSheet.getRange(i + 1, 5).setValue(Number(aRows[i][4]) + 1);
-        break;
+    const idsRegalo = String(venta.regalo_accesorio_id).split(',').map(x => x.trim()).filter(Boolean);
+    idsRegalo.forEach(id => {
+      for (let i = 1; i < aRows.length; i++) {
+        if (String(aRows[i][0]) === String(id)) {
+          accSheet.getRange(i + 1, 5).setValue(Number(aRows[i][4]) + 1);
+          break;
+        }
       }
-    }
+    });
   }
 
   if (venta.imei) {

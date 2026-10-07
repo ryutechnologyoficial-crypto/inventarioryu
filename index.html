@@ -1105,6 +1105,18 @@
         .ryuu-sum-pierda { color: #ff7b7b; font-weight: 800; }
         .ryuu-checkbox { accent-color: var(--ryuu-gold); width: 16px; height: 16px; flex: 0 0 auto; }
         .ryuu-checkbox-row { display: flex; align-items: center; gap: 8px; cursor: pointer; font-weight: 600; }
+        .ryuu-regalo-lista { display: flex; flex-direction: column; gap: 6px; margin-top: 10px; padding: 10px 12px; border: 1px solid rgba(212,175,55,0.2); border-radius: 12px; background: rgba(255,255,255,0.03); max-height: 220px; overflow-y: auto; }
+        .ryuu-regalo-item { font-size: 0.85rem; font-weight: 500; color: var(--ryuu-text); }
+        .ryuu-regalo-item__nom { flex: 1; }
+        .ryuu-regalo-item__meta { color: var(--ryuu-muted); font-size: 0.75rem; white-space: nowrap; }
+        .stock-badge { display: inline-flex; align-items: center; justify-content: center; gap: 7px; min-width: 42px; padding: 4px 12px; border-radius: 999px; font-size: 0.8rem; font-weight: 800; letter-spacing: 0.02em; border: 1.5px solid transparent; }
+        .stock-badge::before { content: ""; width: 8px; height: 8px; border-radius: 50%; background: currentColor; box-shadow: 0 0 7px currentColor; flex: 0 0 auto; }
+        .stock-badge--ok { background: #dcfce7; color: #15803d; border-color: #86efac; }
+        .stock-badge--low { background: #fef3c7; color: #b45309; border-color: #fcd34d; }
+        .stock-badge--out { background: #fee2e2; color: #b91c1c; border-color: #fca5a5; }
+        .ryuu-cel-hist { display: flex; flex-direction: column; gap: 2px; }
+        .ryuu-cel-hist__nom { font-weight: 700; font-size: 0.82rem; line-height: 1.25; color: var(--ryuu-text, #111827); }
+        .ryuu-cel-hist__imei { font-size: 0.72rem; opacity: 0.85; }
         .ryuu-regalo-total { font-size: 1.9rem; font-weight: 800; color: var(--ryuu-gold-light); letter-spacing: 0.01em; padding: 6px 0 10px; }
         .ryuu-details { border-top: 1px solid rgba(212,175,55,0.15); }
         .ryuu-details__summary { cursor: pointer; font-size: 0.85rem; font-weight: 600; color: var(--ryuu-gold-light); padding: 10px 0; list-style: none; user-select: none; }
@@ -1513,7 +1525,7 @@
                         </header>
                     )}
 
-                        {tab === 'resumen' && <VistaResumen ventas={ventas} unidades={unidades} accesorios={accesorios} esAdmin={esAdmin} callGAS={callGAS} onUpdate={loadAllData} />}
+                        {tab === 'resumen' && <VistaResumen ventas={ventas} unidades={unidades} modelos={modelos} accesorios={accesorios} esAdmin={esAdmin} callGAS={callGAS} onUpdate={loadAllData} />}
                         {tab === 'registrar' && <VistaVender session={session} callGAS={callGAS} unidades={unidades} accesorios={accesorios} onComplete={() => { loadAllData(); setTab('resumen'); }} />}
                         {tab === 'celulares' && <VistaCelulares unidades={unidades} modelos={modelos} esAdmin={esAdmin} callGAS={callGAS} onUpdate={loadAllData} />}
                         {tab === 'accesorios' && <VistaAccesorios accesorios={accesorios} esAdmin={esAdmin} callGAS={callGAS} onUpdate={loadAllData} />}
@@ -2236,7 +2248,7 @@
         // ==========================================
         // VISTA 1: RESUMEN Y DASHBOARD
         // ==========================================
-        function PanelHistorialVentas({ ventas, accesorios, esAdmin, callGAS, onUpdate }) {
+        function PanelHistorialVentas({ ventas, unidades = [], modelos = [], accesorios, esAdmin, callGAS, onUpdate }) {
             const [editTarget, setEditTarget] = useState(null);
             const [editValor, setEditValor] = useState('');
             const [editCosto, setEditCosto] = useState('');
@@ -2278,6 +2290,16 @@
                 if (!id) return '—';
                 const a = listaAccesorios.find(x => String(x.id) === String(id));
                 return a ? a.nombre : String(id);
+            };
+
+            // Nombre comercial del equipo (ej. iPhone 13 Pro) resuelto por IMEI.
+            const nombreCelular = (v) => {
+                const un = (unidades || []).find(u => u.imei && String(u.imei) === String(v.imei))
+                    || (unidades || []).find(u => String(u.id) === String(v.unidad_id));
+                if (!un) return '';
+                const mo = (modelos || []).find(m => String(m.id) === String(un.modelo_id));
+                if (mo && mo.nombre) return String(mo.nombre);
+                return String(un.modelo_id || '');
             };
 
             const abrirEditar = (v) => {
@@ -2346,16 +2368,24 @@
                                             <td className="ryuu-cell-muted">{fmtFecha(v.fecha_hora)}</td>
                                             <td>{v.nombre_cliente || '—'}</td>
                                             <td>
-                                                {v.tipo_producto === 'celular'
-                                                    ? (v.imei ? <span className="ryuu-cell-mono">{v.imei}</span> : 'Celular')
-                                                    : nombreAcc(v.producto_id)}
+                                                {v.tipo_producto === 'celular' ? (
+                                                    <span className="ryuu-cel-hist">
+                                                        <span className="ryuu-cel-hist__nom">{nombreCelular(v) || 'Celular'}</span>
+                                                        {v.imei ? <span className="ryuu-cell-mono ryuu-cel-hist__imei">{v.imei}</span> : null}
+                                                    </span>
+                                                ) : nombreAcc(v.producto_id)}
                                             </td>
                                             <td className="ryuu-num ryuu-num--green">{formatoCOP(v.valor_venta)}</td>
                                             <td className="ryuu-num">{formatoCOP(v.costo_total)}</td>
                                             <td className="ryuu-num">{formatoCOP(v.ganancia)}</td>
                                             <td>
                                                 {v.editado === true && <span className="ryuu-pill ryuu-pill--gold">Corregida</span>}
-                                                {v.regalo_accesorio_id && <span className="ryuu-pill ryuu-pill--gold">Regalo</span>}
+                                                {(() => {
+                                                    const idsRegalo = String(v.regalo_accesorio_id || '').split(',').filter(x => x.trim());
+                                                    if (!idsRegalo.length) return null;
+                                                    const nombresRegalo = idsRegalo.map(id => nombreAcc(id)).join(', ');
+                                                    return <span className="ryuu-pill ryuu-pill--gold" title={nombresRegalo}>Regalo{idsRegalo.length > 1 ? ` x${idsRegalo.length}` : ''}</span>;
+                                                })()}
                                             </td>
                                             <td className="ryuu-tright">
                                                 {esAdmin && (
@@ -2406,7 +2436,7 @@
             );
         }
 
-        function VistaResumen({ ventas, unidades, accesorios, esAdmin, callGAS, onUpdate }) {
+        function VistaResumen({ ventas, unidades, modelos, accesorios, esAdmin, callGAS, onUpdate }) {
             const hoy = new Date().toISOString().split('T')[0];
             const mesActual = hoy.substring(0, 7);
 
@@ -2493,7 +2523,7 @@
                         <CardStat title="Utilidad del Mes" value={formatoCOP(gananciaMes)} sub="Ganancia neta mes" icon="meta" tone="violet" />
                     </div>
 
-                    <PanelHistorialVentas ventas={ventas} accesorios={accesorios} esAdmin={esAdmin} callGAS={callGAS} onUpdate={onUpdate} />
+                    <PanelHistorialVentas ventas={ventas} unidades={unidades} modelos={modelos} accesorios={accesorios} esAdmin={esAdmin} callGAS={callGAS} onUpdate={onUpdate} />
 
                     <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
                                                 <div className="ryuu-card ryuu-panel">
@@ -2902,7 +2932,7 @@
                         </div>
                     </div>
 
-                    <PanelHistorialVentas ventas={ventas} accesorios={accesorios} esAdmin={esAdmin} callGAS={callGAS} onUpdate={onUpdate} />
+                    <PanelHistorialVentas ventas={ventas} unidades={unidades} modelos={modelos} accesorios={accesorios} esAdmin={esAdmin} callGAS={callGAS} onUpdate={onUpdate} />
                 </div>
             );
         }
@@ -2922,7 +2952,7 @@
             const [loading, setLoading] = useState(false);
             const [error, setError] = useState('');
             const [regalo, setRegalo] = useState(false);
-            const [regaloAccId, setRegaloAccId] = useState('');
+            const [regaloAccIds, setRegaloAccIds] = useState([]);
             const [costoUnit, setCostoUnit] = useState('');
             const [costoServicio, setCostoServicio] = useState('');
             const [valorCobrado, setValorCobrado] = useState('');
@@ -2936,15 +2966,24 @@
             // elegido. No altera el valor enviado ni la logica de registrarVenta.
             const unidadSeleccionada = disponibles.find(c => String(c.id) === String(unidadId));
             const accesorioSeleccionado = accesorios.find(a => String(a.id) === String(productoId));
-            const regaloSeleccionado = tipo === 'celular' && regalo && regaloAccId
-                ? accesorios.find(a => String(a.id) === String(regaloAccId))
-                : null;
+            const regalosSeleccionados = tipo === 'celular' && regalo
+                ? regaloAccIds
+                    .map(id => accesorios.find(a => String(a.id) === String(id)))
+                    .filter(Boolean)
+                : [];
             const costoBase = tipo === 'celular'
                 ? Number(unidadSeleccionada?.costo_real || 0)
                 : Number(accesorioSeleccionado?.costo || 0) * Number(cantidad || 1);
-            const costoTotal = costoBase + (regaloSeleccionado ? Number(regaloSeleccionado.costo || 0) : 0);
+            const costoRegalos = regalosSeleccionados.reduce((s, a) => s + Number(a.costo || 0), 0);
+            const costoTotal = costoBase + costoRegalos;
             const gananciaEst = Number(valorVenta || 0) - costoTotal;
             const accesoriosRegalables = accesorios.filter(a => Number(a.stock) >= 1);
+
+            const alternarRegalo = (id) => {
+                setRegaloAccIds(prev => prev.includes(String(id))
+                    ? prev.filter(x => x !== String(id))
+                    : [...prev, String(id)]);
+            };
 
             // Movimientos que no pasan por inventario: reventa directa,
             // servicio técnico y vales de gasto del negocio.
@@ -2974,7 +3013,7 @@
             // Deja vacío todo lo capturado en el tipo anterior.
             const limpiarFormulario = () => {
                 setUnidadId(''); setProductoId(''); setValorVenta(''); setNota(''); setCliente('');
-                setRegalo(false); setRegaloAccId(''); setCantidad(1);
+                setRegalo(false); setRegaloAccIds([]); setCantidad(1);
                 setCostoUnit(''); setCostoServicio(''); setValorCobrado('');
                 setValeConcepto(''); setValeMonto(''); setValeCategoria('');
                 setError('');
@@ -3001,7 +3040,7 @@
                     if (!cliente) { setError('Ingresa el nombre del cliente.'); return; }
                     if (tipo === 'celular' && !unidadId) { setError('Selecciona un celular.'); return; }
                     if (tipo === 'accesorio' && !productoId) { setError('Selecciona un accesorio.'); return; }
-                    if (tipo === 'celular' && regalo && !regaloAccId) { setError('Selecciona el accesorio que vas a regalar.'); return; }
+                    if (tipo === 'celular' && regalo && regaloAccIds.length === 0) { setError('Selecciona al menos un accesorio para regalar.'); return; }
                 }
 
                 setLoading(true);
@@ -3052,7 +3091,7 @@
                             valor_venta: Number(valorVenta),
                             costo_total: costoBase,
                             ganancia: gananciaEst,
-                            accesorio_regalo_id: tipo === 'celular' && regalo ? regaloAccId : undefined
+                            accesorio_regalo_id: tipo === 'celular' && regalo && regaloAccIds.length ? regaloAccIds.join(',') : undefined
                         });
                         alert('¡Venta registrada con éxito!');
                     }
@@ -3117,16 +3156,24 @@
 
                                 <div className="ryuu-field">
                                     <label className="ryuu-label ryuu-checkbox-row">
-                                        <input type="checkbox" checked={regalo} onChange={e => { setRegalo(e.target.checked); if (!e.target.checked) setRegaloAccId(''); }} className="ryuu-checkbox" />
-                                        <span>Agregar regalo (descuenta stock del accesorio)</span>
+                                        <input type="checkbox" checked={regalo} onChange={e => { setRegalo(e.target.checked); if (!e.target.checked) setRegaloAccIds([]); }} className="ryuu-checkbox" />
+                                        <span>Agregar regalo{regaloAccIds.length > 0 ? ` (${regaloAccIds.length})` : ''} (descuenta stock del accesorio)</span>
                                     </label>
-                                    {regalo && (
-                                        <select value={regaloAccId} onChange={e => setRegaloAccId(e.target.value)} className="ryuu-select" style={{ marginTop: '8px' }}>
-                                            <option value="">-- Selecciona el accesorio a regalar --</option>
+                                    {regalo && accesoriosRegalables.length > 0 && (
+                                        <div className="ryuu-regalo-lista">
                                             {accesoriosRegalables.map((a, i) => (
-                                                <option key={i} value={a.id}>{a.nombre} (stock: {a.stock}) · Costo {formatoCOP(a.costo)}</option>
+                                                <label key={i} className="ryuu-checkbox-row ryuu-regalo-item">
+                                                    <input type="checkbox" className="ryuu-checkbox" checked={regaloAccIds.includes(String(a.id))} onChange={() => alternarRegalo(a.id)} />
+                                                    <span className="ryuu-regalo-item__nom">{a.nombre}</span>
+                                                    <span className="ryuu-regalo-item__meta">stock {a.stock} · {formatoCOP(a.costo)}</span>
+                                                </label>
                                             ))}
-                                        </select>
+                                        </div>
+                                    )}
+                                    {regalo && regaloAccIds.length > 0 && (
+                                        <p className="ryuu-cell-muted" style={{ marginTop: '8px', fontSize: 13 }}>
+                                            Regalos: {regalosSeleccionados.map(a => a.nombre).join(', ')} · Total {formatoCOP(costoRegalos)}
+                                        </p>
                                     )}
                                     {regalo && accesoriosRegalables.length === 0 && (
                                         <p className="ryuu-cell-muted" style={{ marginTop: '8px', fontSize: 13 }}>No hay accesorios con stock disponible para regalar.</p>
@@ -3278,7 +3325,7 @@
                                 {valorVenta && (
                                     <div className="ryuu-selling__summary">
                                         <span>Costo: <strong>{formatoCOP(costoTotal)}</strong></span>
-                                        {regaloSeleccionado && <span className="ryuu-sum-item">Regalo: {regaloSeleccionado.nombre} (−{formatoCOP(regaloSeleccionado.costo)})</span>}
+                                        {regalosSeleccionados.length > 0 && <span className="ryuu-sum-item">Regalos: {regalosSeleccionados.map(a => `${a.nombre} (−${formatoCOP(a.costo)})`).join(', ')}</span>}
                                         <span className="ryuu-sum-util">Utilidad Est.: {formatoCOP(gananciaEst)}</span>
                                     </div>
                                 )}
@@ -3917,6 +3964,87 @@
             const [ajusteCant, setAjusteCant] = useState('1');
             const [ajusteForm, setAjusteForm] = useState({ nombre: '', costo: '', precio_recomendado: '' });
             const [guardando, setGuardando] = useState(false);
+            const [busqueda, setBusqueda] = useState('');
+            const [filtroStock, setFiltroStock] = useState('todos');
+            const [filtroPrecio, setFiltroPrecio] = useState('todos');
+            const [filtroCosto, setFiltroCosto] = useState('todos');
+            const [orden, setOrden] = useState('nombre');
+
+            const chipsStock = [
+                { id: 'todos', label: 'Todos' },
+                { id: 'sin', label: 'Sin stock' },
+                { id: 'bajo', label: 'Stock bajo' },
+                { id: 'ok', label: 'Con stock' }
+            ];
+
+            const rangosPrecio = [
+                { id: 'todos', label: 'Precio: Todos' },
+                { id: '0-20000', label: 'Precio hasta $20.000' },
+                { id: '20000-50000', label: 'Precio $20.000 – $50.000' },
+                { id: '50000-100000', label: 'Precio $50.000 – $100.000' },
+                { id: '100000+', label: 'Precio más de $100.000' }
+            ];
+
+            const rangosCosto = [
+                { id: 'todos', label: 'Costo: Todos' },
+                { id: '0-20000', label: 'Costo hasta $20.000' },
+                { id: '20000-50000', label: 'Costo $20.000 – $50.000' },
+                { id: '50000-100000', label: 'Costo $50.000 – $100.000' },
+                { id: '100000+', label: 'Costo más de $100.000' }
+            ];
+
+            const enRango = (valor, rango) => {
+                if (rango === 'todos') return true;
+                const v = Number(valor) || 0;
+                if (rango === '0-20000') return v < 20000;
+                if (rango === '20000-50000') return v >= 20000 && v < 50000;
+                if (rango === '50000-100000') return v >= 50000 && v < 100000;
+                if (rango === '100000+') return v >= 100000;
+                return true;
+            };
+
+            const contarStock = (id) => (accesorios || []).filter(a => {
+                const stock = Number(a.stock) || 0;
+                if (id === 'sin') return stock <= 0;
+                if (id === 'bajo') return stock > 0 && stock <= 3;
+                if (id === 'ok') return stock > 3;
+                return true;
+            }).length;
+
+            const accesoriosFiltrados = useMemo(() => {
+                const busq = normalizarBusqueda(busqueda);
+                const lista = (accesorios || []).filter(a => {
+                    const stock = Number(a.stock) || 0;
+                    if (filtroStock === 'sin' && stock > 0) return false;
+                    if (filtroStock === 'bajo' && !(stock > 0 && stock <= 3)) return false;
+                    if (filtroStock === 'ok' && stock <= 3) return false;
+                    if (!enRango(a.precio_recomendado, filtroPrecio)) return false;
+                    if (!enRango(a.costo, filtroCosto)) return false;
+                    if (!busq) return true;
+                    return normalizarBusqueda([a.nombre, a.costo, a.precio_recomendado, a.stock].join(' ')).includes(busq);
+                });
+                const dir = orden === 'nombre' ? 0 : (orden.endsWith('-desc') ? -1 : 1);
+                const campo = orden.startsWith('stock') ? 'stock' : orden.startsWith('precio') ? 'precio_recomendado' : 'costo';
+                if (dir !== 0) {
+                    lista.sort((x, y) => (Number(x[campo]) - Number(y[campo])) * dir);
+                } else {
+                    lista.sort((x, y) => String(x.nombre || '').localeCompare(String(y.nombre || '')));
+                }
+                return lista;
+            }, [accesorios, busqueda, filtroStock, filtroPrecio, filtroCosto, orden]);
+
+            const badgeStock = (stock) => {
+                const s = Number(stock) || 0;
+                if (s <= 0) return 'stock-badge stock-badge--out';
+                if (s <= 3) return 'stock-badge stock-badge--low';
+                return 'stock-badge stock-badge--ok';
+            };
+
+            const hayFiltros = !!busqueda || filtroStock !== 'todos' || filtroPrecio !== 'todos' || filtroCosto !== 'todos' || orden !== 'nombre';
+            const limpiarFiltros = () => {
+                setBusqueda(''); setFiltroStock('todos'); setFiltroPrecio('todos');
+                setFiltroCosto('todos'); setOrden('nombre');
+            };
 
             // Resumen del inventario de accesorios.
             const totalUnidades = (accesorios || []).reduce((acc, a) => acc + (Number(a.stock) || 0), 0);
@@ -4051,6 +4179,66 @@
                         </div>
                     )}
 
+                    <div className="ryuu-inv__toolbar">
+                        <div className="ryuu-search ryuu-search--big">
+                            <svg className="ryuu-search__icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                                <circle cx="11" cy="11" r="7" />
+                                <line x1="21" y1="21" x2="16.65" y2="16.65" />
+                            </svg>
+                            <input
+                                type="text"
+                                value={busqueda}
+                                onChange={e => setBusqueda(e.target.value)}
+                                placeholder="Buscar accesorio por nombre, costo, precio o stock..."
+                                className="ryuu-search__input"
+                            />
+                            {busqueda && (
+                                <button className="ryuu-search__clear" onClick={() => setBusqueda('')} aria-label="Limpiar búsqueda">×</button>
+                            )}
+                        </div>
+
+                        <div className="ryuu-filters">
+                            <div className="ryuu-chips ryuu-filters__chips">
+                                {chipsStock.map(ch => (
+                                    <button
+                                        key={ch.id}
+                                        onClick={() => setFiltroStock(ch.id)}
+                                        className={`ryuu-chip ${filtroStock === ch.id ? 'ryuu-chip--active' : ''}`}
+                                    >
+                                        <span className="ryuu-chip__label">{ch.label}</span>
+                                        <span className="ryuu-chip__count">{contarStock(ch.id)}</span>
+                                    </button>
+                                ))}
+                            </div>
+                            <div className="ryuu-fselects">
+                                <select className="ryuu-fselect" value={filtroPrecio} onChange={e => setFiltroPrecio(e.target.value)}>
+                                    {rangosPrecio.map(r => <option key={r.id} value={r.id}>{r.label}</option>)}
+                                </select>
+                                <select className="ryuu-fselect" value={filtroCosto} onChange={e => setFiltroCosto(e.target.value)}>
+                                    {rangosCosto.map(r => <option key={r.id} value={r.id}>{r.label}</option>)}
+                                </select>
+                                <select className="ryuu-fselect" value={orden} onChange={e => setOrden(e.target.value)}>
+                                    <option value="nombre">Orden: Nombre (A-Z)</option>
+                                    <option value="stock-asc">Orden: Menor stock</option>
+                                    <option value="stock-desc">Orden: Mayor stock</option>
+                                    <option value="precio-asc">Orden: Precio menor</option>
+                                    <option value="precio-desc">Orden: Precio mayor</option>
+                                    <option value="costo-asc">Orden: Costo menor</option>
+                                    <option value="costo-desc">Orden: Costo mayor</option>
+                                </select>
+                                {hayFiltros && (
+                                    <button onClick={limpiarFiltros} className="ryuu-chip" style={{ cursor: 'pointer' }}>
+                                        <span className="ryuu-chip__label">Limpiar filtros</span>
+                                    </button>
+                                )}
+                            </div>
+                        </div>
+                    </div>
+
+                    <p className="text-xs text-gray-500" style={{ margin: 0 }}>
+                        Mostrando {accesoriosFiltrados.length} de {(accesorios || []).length} accesorio(s)
+                    </p>
+
                     <div className="bg-white rounded-xl shadow-sm border overflow-x-auto">
                         <table className="w-full text-xs text-left">
                             <thead className="bg-gray-50 uppercase text-gray-600">
@@ -4063,13 +4251,20 @@
                                 </tr>
                             </thead>
                             <tbody className="divide-y">
-                                {accesorios.map((a, i) => (
+                                {accesoriosFiltrados.length === 0 && (
+                                    <tr>
+                                        <td colSpan={esAdmin ? 5 : 4} className="p-6 text-center text-gray-500">
+                                            No se encontraron accesorios con esa búsqueda o filtros.
+                                        </td>
+                                    </tr>
+                                )}
+                                {accesoriosFiltrados.map((a, i) => (
                                     <tr key={i} className="hover:bg-gray-50">
                                         <td className="p-3 font-medium">{a.nombre}</td>
                                         <td className="p-3">{formatoCOP(a.costo)}</td>
                                         <td className="p-3 text-green-600 font-semibold">{formatoCOP(a.precio_recomendado)}</td>
                                         <td className="p-3">
-                                            <span className={`px-2 py-0.5 rounded text-xs ${Number(a.stock) <= 3 ? 'bg-red-100 text-red-800' : 'bg-gray-100 text-gray-700'}`}>{a.stock}</span>
+                                            <span className={badgeStock(a.stock)}>{a.stock}</span>
                                         </td>
                                         {esAdmin && (
                                             <td className="p-3">
