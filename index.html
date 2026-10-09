@@ -1117,6 +1117,9 @@
         .ryuu-cel-hist { display: flex; flex-direction: column; gap: 2px; }
         .ryuu-cel-hist__nom { font-weight: 700; font-size: 0.82rem; line-height: 1.25; color: var(--ryuu-text, #111827); }
         .ryuu-cel-hist__imei { font-size: 0.72rem; opacity: 0.85; }
+        .ryuu-table tbody tr.ryuu-hist-sub td { background: rgba(212,175,55,0.05); }
+        .ryuu-table tbody tr.ryuu-hist-sub .ryuu-cel-hist { padding-left: 14px; border-left: 2px solid rgba(212,175,55,0.35); }
+        .ryuu-table tbody tr.ryuu-hist-total td { background: rgba(212,175,55,0.10); font-weight: 700; }
         .ryuu-regalo-total { font-size: 1.9rem; font-weight: 800; color: var(--ryuu-gold-light); letter-spacing: 0.01em; padding: 6px 0 10px; }
         .ryuu-details { border-top: 1px solid rgba(212,175,55,0.15); }
         .ryuu-details__summary { cursor: pointer; font-size: 0.85rem; font-weight: 600; color: var(--ryuu-gold-light); padding: 10px 0; list-style: none; user-select: none; }
@@ -1304,6 +1307,9 @@
             const [retomas, setRetomas] = useState([]);
             const [configuracion, setConfiguracion] = useState([]);
             const [ssUrl, setSsUrl] = useState('');
+            // Detecta si el backend desplegado ya soporta el formato nuevo
+            // (items_detalle / vales). Si no, la app usa un respaldo temporal.
+            const [soportaItems, setSoportaItems] = useState(true);
 
             const esAdmin = session && session.rol === 'admin';
 
@@ -1351,6 +1357,9 @@
                         setModelos(data.modelos_celular || []);
                         setRetomas(data.referencia_retoma || []);
                         setConfiguracion(data.configuracion || []);
+                        const tieneVales = Object.prototype.hasOwnProperty.call(data, 'vales');
+                        const tieneItems = Array.isArray(data.ventas) && data.ventas.some(v => v && Object.prototype.hasOwnProperty.call(v, 'items_detalle'));
+                        setSoportaItems(tieneVales || tieneItems);
                     }
                 } catch (err) {
                     console.error("Error cargando datos:", err);
@@ -1526,7 +1535,7 @@
                     )}
 
                         {tab === 'resumen' && <VistaResumen ventas={ventas} unidades={unidades} modelos={modelos} accesorios={accesorios} esAdmin={esAdmin} callGAS={callGAS} onUpdate={loadAllData} />}
-                        {tab === 'registrar' && <VistaVender session={session} callGAS={callGAS} unidades={unidades} accesorios={accesorios} onComplete={() => { loadAllData(); setTab('resumen'); }} />}
+                        {tab === 'registrar' && <VistaVender session={session} callGAS={callGAS} unidades={unidades} accesorios={accesorios} soportaItems={soportaItems} onComplete={() => { loadAllData(); setTab('resumen'); }} />}
                         {tab === 'celulares' && <VistaCelulares unidades={unidades} modelos={modelos} esAdmin={esAdmin} callGAS={callGAS} onUpdate={loadAllData} />}
                         {tab === 'accesorios' && <VistaAccesorios accesorios={accesorios} esAdmin={esAdmin} callGAS={callGAS} onUpdate={loadAllData} />}
                         {tab === 'ventas' && <VistaVentas ventas={ventas} unidades={unidades} modelos={modelos} accesorios={accesorios} esAdmin={esAdmin} callGAS={callGAS} onUpdate={loadAllData} />}
@@ -2256,6 +2265,9 @@
             const [editError, setEditError] = useState('');
             const [historialFull, setHistorialFull] = useState(null);
             const [histFullLoading, setHistFullLoading] = useState(false);
+            const [deleteTarget, setDeleteTarget] = useState(null);
+            const [deleteLoading, setDeleteLoading] = useState(false);
+            const [deleteError, setDeleteError] = useState('');
 
             const listaVentas = historialFull ? historialFull.ventas : ventas;
             const listaAccesorios = historialFull ? historialFull.accesorios : accesorios;
@@ -2302,6 +2314,122 @@
                 return String(un.modelo_id || '');
             };
 
+            // Lista de accesorios de una venta (varios), guardada en items_detalle.
+            const itemsDetalleVenta = (v) => {
+                if (!v.items_detalle) return [];
+                try {
+                    const det = JSON.parse(v.items_detalle);
+                    return Array.isArray(det) ? det : [];
+                } catch (e) {
+                    return [];
+                }
+            };
+            const descItemsVenta = (v) => {
+                const det = itemsDetalleVenta(v);
+                if (!det.length) return null;
+                return det.map(d => `${d.nombre}${Number(d.cantidad) > 1 ? ' x' + d.cantidad : ''}${d.regalo ? ' (regalo)' : ''}`).join(', ');
+            };
+
+            // Marcador de grupo para el respaldo con backend viejo ([G:xxxx]).
+            const marcaGrupo = (v) => {
+                const m = String(v.nota || '').match(/\[G:([a-z0-9]+)\]/i);
+                return m ? m[1] : null;
+            };
+            const notaLimpia = (v) => String(v.nota || '')
+                .replace(/\[G:[a-z0-9]+\]/ig, '')
+                .split('| Accesorios:')[0].split('Accesorios:')[0].trim();
+
+            // Regalos de ventas antiguas (antes de items_detalle): vienen como
+            // regalo_accesorio_id o como texto "Regalo: nombre, nombre" en la nota.
+            const regalosLegacyVenta = (v) => {
+                const ids = String(v.regalo_accesorio_id || '').split(',').map(x => x.trim()).filter(Boolean);
+                if (ids.length) {
+                    return ids.map(id => {
+                        const a = listaAccesorios.find(x => String(x.id) === String(id));
+                        return { nombre: a ? a.nombre : String(id), costo: a ? Number(a.costo || 0) : 0 };
+                    });
+                }
+                const m = String(v.nota || '').match(/Regalo:\s*([^|]+)/i);
+                if (!m) return [];
+                return m[1].split(',').map(x => x.trim()).filter(Boolean).map(nombre => {
+                    const a = listaAccesorios.find(x => String(x.nombre || '').trim().toLowerCase() === nombre.toLowerCase());
+                    return { nombre: nombre, costo: a ? Number(a.costo || 0) : 0 };
+                });
+            };
+
+            // Descompone una venta en una línea por producto vendido
+            // (celular + cada accesorio/regalo), con sus propias cuentas.
+            const lineasDeVenta = (v) => {
+                const detGuardado = itemsDetalleVenta(v);
+                const tieneItems = detGuardado.length > 0;
+                const det = tieneItems
+                    ? detGuardado
+                    : regalosLegacyVenta(v).map(g => ({ nombre: g.nombre, cantidad: 1, precio_unit: 0, costo_unit: g.costo, regalo: true }));
+                const valItem = (d) => d.regalo ? 0 : Number(d.precio_unit || 0) * Number(d.cantidad || 1);
+                const costoItem = (d) => Number(d.costo_unit || 0) * Number(d.cantidad || 1);
+                const sumVenta = det.reduce((s, d) => s + valItem(d), 0);
+                const sumCosto = det.reduce((s, d) => s + costoItem(d), 0);
+                const lineas = [];
+                det.forEach(d => lineas.push({
+                    nombre: d.nombre + (Number(d.cantidad) > 1 ? ' x' + d.cantidad : ''),
+                    sub: d.regalo ? 'Regalo' : '',
+                    valor: valItem(d),
+                    costo: costoItem(d),
+                    ganancia: valItem(d) - costoItem(d)
+                }));
+                const base = (nombre, sub, valor, costo) => ({ nombre: nombre, sub: sub || '', valor: valor, costo: costo, ganancia: valor - costo });
+                if (v.tipo_producto === 'celular') {
+                    const valor = Number(v.valor_venta || 0) - sumVenta;
+                    const costo = Number(v.costo_total || 0) - sumCosto;
+                    lineas.unshift(base(nombreCelular(v) || 'Celular', v.imei ? 'IMEI ' + v.imei : '', valor, costo));
+                } else if (v.tipo_producto === 'reventa') {
+                    const valor = Number(v.valor_venta || 0) - sumVenta;
+                    const costo = Number(v.costo_total || 0) - sumCosto;
+                    lineas.unshift(base('Reventa', notaLimpia(v), valor, costo));
+                } else if (v.tipo_producto === 'servicio') {
+                    const valor = Number(v.valor_venta || 0) - sumVenta;
+                    const costo = Number(v.costo_total || 0) - sumCosto;
+                    lineas.unshift(base('Servicio técnico', notaLimpia(v), valor, costo));
+                } else if (v.tipo_producto === 'vale') {
+                    lineas.unshift(base('Vale', v.producto_id || '', Number(v.valor_venta || 0), Number(v.costo_total || 0)));
+                } else if (v.tipo_producto === 'accesorio') {
+                    if (!tieneItems) {
+                        const valor = Number(v.valor_venta || 0) - sumVenta;
+                        const costo = Number(v.costo_total || 0) - sumCosto;
+                        lineas.unshift(base(nombreAcc(v.producto_id), '', valor, costo));
+                    }
+                } else {
+                    const valor = Number(v.valor_venta || 0) - sumVenta;
+                    const costo = Number(v.costo_total || 0) - sumCosto;
+                    lineas.unshift(base(nombreAcc(v.producto_id), '', valor, costo));
+                }
+                return lineas;
+            };
+
+            // Agrupa ventas que comparten el marcador [G:xxxx] (respaldo con
+            // backend viejo) para mostrarlas como una sola venta desglosada.
+            const agruparVentas = (ventasOrd) => {
+                const grupos = [];
+                const idx = {};
+                ventasOrd.forEach(v => {
+                    const g = marcaGrupo(v);
+                    if (g && idx[g] !== undefined) {
+                        grupos[idx[g]].ventas.push(v);
+                    } else {
+                        const grupo = { key: g || ('v' + (v.id != null ? v.id : grupos.length)), ventas: [v] };
+                        if (g) idx[g] = grupos.length;
+                        grupos.push(grupo);
+                    }
+                });
+                grupos.forEach(gr => {
+                    gr.ventas.sort((a, b) => (a.tipo_producto === 'accesorio' ? 1 : 0) - (b.tipo_producto === 'accesorio' ? 1 : 0));
+                    gr.principal = gr.ventas.find(x => x.tipo_producto !== 'accesorio') || gr.ventas[0];
+                    gr.lineas = gr.ventas.flatMap(x => lineasDeVenta(x));
+                    gr.ids = gr.ventas.map(x => x.id).filter(x => x !== undefined && x !== null);
+                });
+                return grupos;
+            };
+
             const abrirEditar = (v) => {
                 setEditTarget(v);
                 setEditValor(Number(v.valor_venta || 0));
@@ -2330,6 +2458,33 @@
             };
 
             const editGanancia = Number(editValor || 0) - Number(editCosto || 0);
+
+            const pedirEliminar = (gr) => {
+                setDeleteError('');
+                const ids = gr.ids || (gr.id !== undefined ? [gr.id] : []);
+                const ref = gr.principal
+                    ? (gr.principal.numero_correlativo || gr.principal.id)
+                    : (gr.numero_correlativo || gr.id);
+                setDeleteTarget({ ids: ids, ref: ref });
+            };
+
+            const confirmarEliminar = async () => {
+                if (!deleteTarget || !deleteTarget.ids || !deleteTarget.ids.length) return;
+                setDeleteError('');
+                setDeleteLoading(true);
+                try {
+                    for (const id of deleteTarget.ids) {
+                        await callGAS('anularVenta', { ventaId: id });
+                    }
+                    setDeleteTarget(null);
+                    setHistorialFull(null);
+                    onUpdate();
+                } catch (err) {
+                    setDeleteError(err.message);
+                } finally {
+                    setDeleteLoading(false);
+                }
+            };
 
             return (
                 <>
@@ -2362,38 +2517,68 @@
                                     </tr>
                                 </thead>
                                 <tbody>
-                                    {ventasOrdenadas.map((v, i) => (
-                                        <tr key={i}>
-                                            <td className="ryuu-cell-mono">{v.numero_correlativo || v.id}</td>
-                                            <td className="ryuu-cell-muted">{fmtFecha(v.fecha_hora)}</td>
-                                            <td>{v.nombre_cliente || '—'}</td>
-                                            <td>
-                                                {v.tipo_producto === 'celular' ? (
-                                                    <span className="ryuu-cel-hist">
-                                                        <span className="ryuu-cel-hist__nom">{nombreCelular(v) || 'Celular'}</span>
-                                                        {v.imei ? <span className="ryuu-cell-mono ryuu-cel-hist__imei">{v.imei}</span> : null}
-                                                    </span>
-                                                ) : nombreAcc(v.producto_id)}
-                                            </td>
-                                            <td className="ryuu-num ryuu-num--green">{formatoCOP(v.valor_venta)}</td>
-                                            <td className="ryuu-num">{formatoCOP(v.costo_total)}</td>
-                                            <td className="ryuu-num">{formatoCOP(v.ganancia)}</td>
-                                            <td>
-                                                {v.editado === true && <span className="ryuu-pill ryuu-pill--gold">Corregida</span>}
-                                                {(() => {
-                                                    const idsRegalo = String(v.regalo_accesorio_id || '').split(',').filter(x => x.trim());
-                                                    if (!idsRegalo.length) return null;
-                                                    const nombresRegalo = idsRegalo.map(id => nombreAcc(id)).join(', ');
-                                                    return <span className="ryuu-pill ryuu-pill--gold" title={nombresRegalo}>Regalo{idsRegalo.length > 1 ? ` x${idsRegalo.length}` : ''}</span>;
-                                                })()}
-                                            </td>
-                                            <td className="ryuu-tright">
-                                                {esAdmin && (
-                                                    <button onClick={() => abrirEditar(v)} className="ryuu-btn ryuu-btn--xs ryuu-btn--edit">Editar</button>
-                                                )}
-                                            </td>
-                                        </tr>
-                                    ))}
+                                    {agruparVentas(ventasOrdenadas).map((gr) => {
+                                        const v = gr.principal;
+                                        const lineas = gr.lineas;
+                                        const multi = lineas.length > 1;
+                                        const totalValor = lineas.reduce((s, l) => s + l.valor, 0);
+                                        const totalCosto = lineas.reduce((s, l) => s + l.costo, 0);
+                                        const rowCount = lineas.length + (multi ? 1 : 0);
+                                        return [
+                                            ...lineas.map((ln, j) => (
+                                                <tr key={'l' + gr.key + '-' + j} className={j > 0 ? 'ryuu-hist-sub' : ''}>
+                                                    {j === 0 && (
+                                                        <>
+                                                            <td rowSpan={rowCount} className="ryuu-cell-mono">{v.numero_correlativo || v.id}</td>
+                                                            <td rowSpan={rowCount} className="ryuu-cell-muted">{fmtFecha(v.fecha_hora)}</td>
+                                                            <td rowSpan={rowCount}>{v.tipo_producto === 'vale' ? (v.producto_id || '—') : (v.nombre_cliente || '—')}</td>
+                                                        </>
+                                                    )}
+                                                    <td>
+                                                        <span className="ryuu-cel-hist">
+                                                            <span className="ryuu-cel-hist__nom">{ln.nombre}</span>
+                                                            {ln.sub ? <span className="ryuu-cell-muted ryuu-cel-hist__imei">{ln.sub}</span> : null}
+                                                        </span>
+                                                    </td>
+                                                    <td className="ryuu-num ryuu-num--green">{formatoCOP(ln.valor)}</td>
+                                                    <td className="ryuu-num">{formatoCOP(ln.costo)}</td>
+                                                    <td className="ryuu-num">{formatoCOP(ln.ganancia)}</td>
+                                                    {j === 0 && (
+                                                        <>
+                                                            <td rowSpan={rowCount}>
+                                                                {gr.ventas.some(x => x.editado === true) && <span className="ryuu-pill ryuu-pill--gold">Corregida</span>}
+                                                                {(() => {
+                                                                    const nombresRegalo = [];
+                                                                    gr.ventas.forEach(x => {
+                                                                        String(x.regalo_accesorio_id || '').split(',').filter(y => y.trim()).forEach(id => nombresRegalo.push(nombreAcc(id)));
+                                                                        itemsDetalleVenta(x).filter(d => d.regalo).forEach(d => nombresRegalo.push(d.nombre + (Number(d.cantidad) > 1 ? ' x' + d.cantidad : '')));
+                                                                    });
+                                                                    if (!nombresRegalo.length) return null;
+                                                                    return <span className="ryuu-pill ryuu-pill--gold" title={nombresRegalo.join(', ')}>Regalo{nombresRegalo.length > 1 ? ` x${nombresRegalo.length}` : ''}</span>;
+                                                                })()}
+                                                            </td>
+                                                            <td rowSpan={rowCount} className="ryuu-tright">
+                                                                {esAdmin && (
+                                                                    <div className="flex items-center gap-2 justify-end">
+                                                                        <button onClick={() => abrirEditar(v)} className="ryuu-btn ryuu-btn--xs ryuu-btn--edit">Editar</button>
+                                                                        <button onClick={() => pedirEliminar(gr)} className="ryuu-btn ryuu-btn--xs ryuu-btn--danger">Eliminar</button>
+                                                                    </div>
+                                                                )}
+                                                            </td>
+                                                        </>
+                                                    )}
+                                                </tr>
+                                            )),
+                                            multi ? (
+                                                <tr key={'total' + gr.key} className="ryuu-hist-total">
+                                                    <td><span className="ryuu-cel-hist__nom">Total venta</span></td>
+                                                    <td className="ryuu-num ryuu-num--green">{formatoCOP(totalValor)}</td>
+                                                    <td className="ryuu-num">{formatoCOP(totalCosto)}</td>
+                                                    <td className="ryuu-num">{formatoCOP(totalValor - totalCosto)}</td>
+                                                </tr>
+                                            ) : null
+                                        ];
+                                    })}
                                     {ventasOrdenadas.length === 0 && (
                                         <tr>
                                             <td colSpan="9" className="ryuu-cell-muted ryuu-tcenter">Aún no hay ventas registradas.</td>
@@ -2429,6 +2614,20 @@
                                         </button>
                                     </div>
                                 </form>
+                            </div>
+                        </div>
+                    )}
+
+                    {deleteTarget && (
+                        <div className="fixed inset-0 bg-black bg-opacity-60 flex items-center justify-center p-4 z-50">
+                            <div className="ryuu-modal-card">
+                                <h3 className="ryuu-modal-title">Eliminar Venta N° {deleteTarget.ref}</h3>
+                                <p className="ryuu-modal-sub">Se quitará del historial (incluidos los accesorios de esa venta). Si era un celular o accesorio, el stock se restaura. No se puede deshacer.</p>
+                                {deleteError && <div className="ryuu-alert ryuu-alert--error">{deleteError}</div>}
+                                <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '8px', paddingTop: '8px' }}>
+                                    <button type="button" onClick={() => setDeleteTarget(null)} className="ryuu-btn ryuu-btn--ghost">Cancelar</button>
+                                    <button type="button" onClick={confirmarEliminar} disabled={deleteLoading} className="ryuu-btn ryuu-btn--danger">{deleteLoading ? 'Eliminando…' : 'Sí, eliminar'}</button>
+                                </div>
                             </div>
                         </div>
                     )}
@@ -2940,10 +3139,9 @@
         // ==========================================
         // VISTA 2: VENDER (celular o accesorio)
         // ==========================================
-        function VistaVender({ session, callGAS, unidades, accesorios, onComplete }) {
+        function VistaVender({ session, callGAS, unidades, accesorios, soportaItems = true, onComplete }) {
             const [tipo, setTipo] = useState('celular');
             const [unidadId, setUnidadId] = useState('');
-            const [productoId, setProductoId] = useState('');
             const [cantidad, setCantidad] = useState(1);
             const [valorVenta, setValorVenta] = useState('');
             const [cliente, setCliente] = useState('');
@@ -2951,39 +3149,128 @@
             const [metodoPago, setMetodoPago] = useState('Efectivo');
             const [loading, setLoading] = useState(false);
             const [error, setError] = useState('');
-            const [regalo, setRegalo] = useState(false);
-            const [regaloAccIds, setRegaloAccIds] = useState([]);
             const [costoUnit, setCostoUnit] = useState('');
             const [costoServicio, setCostoServicio] = useState('');
             const [valorCobrado, setValorCobrado] = useState('');
             const [valeConcepto, setValeConcepto] = useState('');
             const [valeMonto, setValeMonto] = useState('');
             const [valeCategoria, setValeCategoria] = useState('');
+            const [accItems, setAccItems] = useState([]);
+            const [accSelId, setAccSelId] = useState('');
+            const [accSelCant, setAccSelCant] = useState(1);
+            const [accSelPrecio, setAccSelPrecio] = useState('');
+            const [accSelRegalo, setAccSelRegalo] = useState(false);
+            const [accBusqueda, setAccBusqueda] = useState('');
 
             const disponibles = useMemo(() => unidades.filter(c => c.estado === 'disponible'), [unidades]);
 
             // Alimenta tanto el costo de la venta como la ficha visual del equipo
             // elegido. No altera el valor enviado ni la logica de registrarVenta.
             const unidadSeleccionada = disponibles.find(c => String(c.id) === String(unidadId));
-            const accesorioSeleccionado = accesorios.find(a => String(a.id) === String(productoId));
-            const regalosSeleccionados = tipo === 'celular' && regalo
-                ? regaloAccIds
-                    .map(id => accesorios.find(a => String(a.id) === String(id)))
-                    .filter(Boolean)
-                : [];
-            const costoBase = tipo === 'celular'
-                ? Number(unidadSeleccionada?.costo_real || 0)
-                : Number(accesorioSeleccionado?.costo || 0) * Number(cantidad || 1);
-            const costoRegalos = regalosSeleccionados.reduce((s, a) => s + Number(a.costo || 0), 0);
-            const costoTotal = costoBase + costoRegalos;
-            const gananciaEst = Number(valorVenta || 0) - costoTotal;
-            const accesoriosRegalables = accesorios.filter(a => Number(a.stock) >= 1);
 
-            const alternarRegalo = (id) => {
-                setRegaloAccIds(prev => prev.includes(String(id))
-                    ? prev.filter(x => x !== String(id))
-                    : [...prev, String(id)]);
+            // Carrito de accesorios del inventario (se usa para ventas de
+            // accesorio, reventa y también para agregar accesorios/regalos a un celular).
+            const accItemsVenta = accItems
+                .filter(i => !i.regalo)
+                .reduce((s, i) => s + Number(i.precio_unit || 0) * Number(i.cantidad || 1), 0);
+            const accItemsCosto = accItems
+                .reduce((s, i) => s + Number(i.costo_unit || 0) * Number(i.cantidad || 1), 0);
+
+            const costoBase = tipo === 'celular' ? Number(unidadSeleccionada?.costo_real || 0) : 0;
+            const costoTotal = costoBase + accItemsCosto;
+            const gananciaEst = Number(valorVenta || 0) + accItemsVenta - costoTotal;
+
+            const seleccionarAccesorio = (id) => {
+                setAccSelId(id);
+                const a = accesorios.find(x => String(x.id) === String(id));
+                setAccSelPrecio(a ? String(a.precio_recomendado || '') : '');
             };
+
+            const agregarAccItem = () => {
+                const a = accesorios.find(x => String(x.id) === String(accSelId));
+                if (!a) { setError('Selecciona un accesorio para agregar.'); return; }
+                const cant = Math.max(1, Number(accSelCant) || 1);
+                setAccItems(prev => [...prev, {
+                    producto_id: String(a.id),
+                    nombre: a.nombre,
+                    cantidad: cant,
+                    precio_unit: accSelRegalo ? 0 : Number(accSelPrecio || a.precio_recomendado || 0),
+                    costo_unit: Number(a.costo || 0),
+                    regalo: !!accSelRegalo
+                }]);
+                setError('');
+                setAccSelId(''); setAccSelCant(1); setAccSelPrecio(''); setAccSelRegalo(false); setAccBusqueda('');
+            };
+
+            const quitarAccItem = (idx) => setAccItems(prev => prev.filter((_, i) => i !== idx));
+
+            // Filtro para encontrar rápido un accesorio por nombre, ID o código.
+            const accFiltrados = (() => {
+                const q = accBusqueda.trim().toLowerCase();
+                if (!q) return accesorios;
+                return accesorios.filter(a =>
+                    String(a.nombre || '').toLowerCase().includes(q) ||
+                    String(a.id || '').toLowerCase().includes(q) ||
+                    String(a.codigo || '').toLowerCase().includes(q)
+                );
+            })();
+
+            const renderAccesoriosCart = (opcional) => (
+                <div className="ryuu-field">
+                    <label className="ryuu-label">Accesorios del inventario{opcional ? ' (opcional)' : ''}</label>
+                    <input
+                        type="text"
+                        value={accBusqueda}
+                        onChange={e => setAccBusqueda(e.target.value)}
+                        placeholder="Buscar accesorio por nombre o código…"
+                        className="ryuu-input"
+                        style={{ marginBottom: 8 }}
+                    />
+                    <div className="grid grid-cols-2 gap-3">
+                        <select value={accSelId} onChange={e => seleccionarAccesorio(e.target.value)} className="ryuu-select">
+                            <option value="">{accFiltrados.length === 0 ? '-- Sin resultados --' : '-- Accesorio --'}</option>
+                            {accFiltrados.map((a, i) => (
+                                <option key={i} value={a.id}>{a.nombre} (stock: {a.stock})</option>
+                            ))}
+                        </select>
+                        <input type="number" min="1" value={accSelCant} onChange={e => setAccSelCant(e.target.value)} className="ryuu-input" placeholder="Cantidad" />
+                    </div>
+                    <div className="grid grid-cols-2 gap-3" style={{ marginTop: 8 }}>
+                        <input
+                            type="number"
+                            step="0.01"
+                            min="0"
+                            value={accSelPrecio}
+                            onChange={e => setAccSelPrecio(e.target.value)}
+                            disabled={accSelRegalo}
+                            className="ryuu-input ryuu-num-input"
+                            placeholder={accSelRegalo ? 'Regalo (sin cobro)' : 'Precio unitario'}
+                        />
+                        <label className="ryuu-checkbox-row">
+                            <input type="checkbox" className="ryuu-checkbox" checked={accSelRegalo} onChange={e => setAccSelRegalo(e.target.checked)} />
+                            <span>Regalo</span>
+                        </label>
+                    </div>
+                    <button type="button" onClick={agregarAccItem} className="ryuu-btn ryuu-btn--ghost" style={{ marginTop: 10 }}>+ Agregar accesorio</button>
+
+                    {accItems.length > 0 && (
+                        <div style={{ marginTop: 10 }}>
+                            {accItems.map((it, i) => (
+                                <div key={i} className="ryuu-kv" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8, marginBottom: 4 }}>
+                                    <span>
+                                        {it.nombre} x{it.cantidad}
+                                        {it.regalo ? ' (regalo)' : ` · ${formatoCOP(Number(it.precio_unit || 0) * Number(it.cantidad || 1))}`}
+                                    </span>
+                                    <button type="button" onClick={() => quitarAccItem(i)} className="ryuu-btn ryuu-btn--xs ryuu-btn--danger">Quitar</button>
+                                </div>
+                            ))}
+                            <p className="ryuu-cell-muted" style={{ marginTop: 6, fontSize: 13 }}>
+                                Venta accesorios: {formatoCOP(accItemsVenta)} · Costo: {formatoCOP(accItemsCosto)}
+                            </p>
+                        </div>
+                    )}
+                </div>
+            );
 
             // Movimientos que no pasan por inventario: reventa directa,
             // servicio técnico y vales de gasto del negocio.
@@ -3012,11 +3299,68 @@
 
             // Deja vacío todo lo capturado en el tipo anterior.
             const limpiarFormulario = () => {
-                setUnidadId(''); setProductoId(''); setValorVenta(''); setNota(''); setCliente('');
-                setRegalo(false); setRegaloAccIds([]); setCantidad(1);
+                setUnidadId(''); setValorVenta(''); setNota(''); setCliente('');
+                setCantidad(1);
                 setCostoUnit(''); setCostoServicio(''); setValorCobrado('');
                 setValeConcepto(''); setValeMonto(''); setValeCategoria('');
+                setAccItems([]); setAccSelId(''); setAccSelCant(1); setAccSelPrecio(''); setAccSelRegalo(false); setAccBusqueda('');
                 setError('');
+            };
+
+            // Compatibilidad con backends sin la acción registrarVale (versión vieja
+            // del Apps Script que responde "Acción desconocida"). En ese caso el vale
+            // se guarda como una venta de tipo 'vale' con valor negativo, para que
+            // reste en los totales del día/mes sin necesidad de redesplegar.
+            const registrarValeCompat = async (payload) => {
+                try {
+                    return await callGAS('registrarVale', payload);
+                } catch (err) {
+                    const msg = String((err && err.message) || '');
+                    if (!/acci[oó]n desconocida|unknown action/i.test(msg)) throw err;
+                    const monto = Math.abs(Number(payload.monto) || 0);
+                    return await callGAS('registrarVenta', {
+                        tipo_producto: 'vale',
+                        vendedor_id: session.id,
+                        nombre_cliente: '',
+                        nota: ['Vale: ' + payload.concepto, payload.nota].filter(Boolean).join(' | '),
+                        metodo_pago: '',
+                        producto_id: payload.categoria || '',
+                        cantidad: 1,
+                        valor_venta: -monto,
+                        costo_total: 0
+                    });
+                }
+            };
+
+            // Envía una venta que puede incluir accesorios. Si el backend desplegado
+            // es viejo (sin items_detalle), usa un respaldo: registra el producto base
+            // y cada accesorio por separado, con un marcador [G:xxxx] para agruparlos
+            // y mostrarlos como una sola venta en el historial.
+            const ventaConAccesorios = async (payloadNuevo, baseViejo, items) => {
+                if (soportaItems) {
+                    await callGAS('registrarVenta', payloadNuevo);
+                    return;
+                }
+                const gid = 'g' + Date.now().toString(36) + Math.floor(Math.random() * 1000);
+                const marca = '[G:' + gid + ']';
+                if (baseViejo) {
+                    await callGAS('registrarVenta', Object.assign({}, baseViejo, {
+                        nota: baseViejo.nota ? (baseViejo.nota + ' ' + marca) : marca
+                    }));
+                }
+                for (const it of (items || [])) {
+                    await callGAS('registrarVenta', {
+                        tipo_producto: 'accesorio',
+                        vendedor_id: session.id,
+                        nombre_cliente: baseViejo ? baseViejo.nombre_cliente : cliente,
+                        metodo_pago: baseViejo ? baseViejo.metodo_pago : metodoPago,
+                        producto_id: it.producto_id,
+                        cantidad: it.cantidad,
+                        valor_venta: it.regalo ? 0 : Number(it.precio_unit || 0) * Number(it.cantidad || 1),
+                        costo_total: Number(it.costo_unit || 0) * Number(it.cantidad || 1),
+                        nota: marca
+                    });
+                }
             };
 
             const handleSubmit = async (e) => {
@@ -3039,14 +3383,13 @@
                 } else {
                     if (!cliente) { setError('Ingresa el nombre del cliente.'); return; }
                     if (tipo === 'celular' && !unidadId) { setError('Selecciona un celular.'); return; }
-                    if (tipo === 'accesorio' && !productoId) { setError('Selecciona un accesorio.'); return; }
-                    if (tipo === 'celular' && regalo && regaloAccIds.length === 0) { setError('Selecciona al menos un accesorio para regalar.'); return; }
+                    if (tipo === 'accesorio' && accItems.length === 0) { setError('Agrega al menos un accesorio.'); return; }
                 }
 
                 setLoading(true);
                 try {
                     if (esReventa) {
-                        await callGAS('registrarVenta', {
+                        const baseRev = {
                             tipo_producto: 'reventa',
                             vendedor_id: session.id,
                             nombre_cliente: cliente.trim(),
@@ -3055,7 +3398,10 @@
                             cantidad: cantidadRev,
                             valor_venta: precioUnitNum * cantidadRev,
                             costo_total: costoUnitNum * cantidadRev
-                        });
+                        };
+                        await ventaConAccesorios(Object.assign({}, baseRev, {
+                            items: accItems.map(it => ({ producto_id: it.producto_id, cantidad: it.cantidad, precio_unit: it.precio_unit, regalo: it.regalo }))
+                        }), baseRev, accItems);
                         alert('¡Reventa registrada con éxito!');
                     } else if (esServicio) {
                         await callGAS('registrarVenta', {
@@ -3070,7 +3416,7 @@
                         });
                         alert('¡Servicio técnico registrado con éxito!');
                     } else if (esVale) {
-                        await callGAS('registrarVale', {
+                        await registrarValeCompat({
                             concepto: valeConcepto.trim(),
                             monto: valeMontoNum,
                             categoria: valeCategoria.trim(),
@@ -3078,21 +3424,31 @@
                         });
                         alert('¡Vale registrado con éxito.');
                     } else {
-                        await callGAS('registrarVenta', {
-                            tipo_producto: tipo,
-                            unidad_id: tipo === 'celular' ? unidadId : undefined,
-                            producto_id: tipo === 'accesorio' ? productoId : undefined,
-                            imei: tipo === 'celular' ? unidadSeleccionada?.imei : '',
-                            vendedor_id: session.id,
-                            nombre_cliente: cliente,
-                            nota,
-                            metodo_pago: metodoPago,
-                            cantidad: tipo === 'accesorio' ? Number(cantidad) : 1,
-                            valor_venta: Number(valorVenta),
-                            costo_total: costoBase,
-                            ganancia: gananciaEst,
-                            accesorio_regalo_id: tipo === 'celular' && regalo && regaloAccIds.length ? regaloAccIds.join(',') : undefined
-                        });
+                        const itemsPayload = accItems.map(it => ({ producto_id: it.producto_id, cantidad: it.cantidad, precio_unit: it.precio_unit, regalo: it.regalo }));
+                        if (tipo === 'celular') {
+                            const baseCel = {
+                                tipo_producto: 'celular',
+                                unidad_id: unidadId,
+                                imei: unidadSeleccionada?.imei,
+                                vendedor_id: session.id,
+                                nombre_cliente: cliente,
+                                nota,
+                                metodo_pago: metodoPago,
+                                cantidad: 1,
+                                valor_venta: Number(valorVenta),
+                                costo_total: costoBase
+                            };
+                            await ventaConAccesorios(Object.assign({}, baseCel, { items: itemsPayload }), baseCel, accItems);
+                        } else {
+                            await ventaConAccesorios({
+                                tipo_producto: 'accesorio',
+                                vendedor_id: session.id,
+                                nombre_cliente: cliente,
+                                nota,
+                                metodo_pago: metodoPago,
+                                items: itemsPayload
+                            }, null, accItems);
+                        }
                         alert('¡Venta registrada con éxito!');
                     }
                     limpiarFormulario();
@@ -3154,50 +3510,11 @@
                                     </div>
                                 )}
 
-                                <div className="ryuu-field">
-                                    <label className="ryuu-label ryuu-checkbox-row">
-                                        <input type="checkbox" checked={regalo} onChange={e => { setRegalo(e.target.checked); if (!e.target.checked) setRegaloAccIds([]); }} className="ryuu-checkbox" />
-                                        <span>Agregar regalo{regaloAccIds.length > 0 ? ` (${regaloAccIds.length})` : ''} (descuenta stock del accesorio)</span>
-                                    </label>
-                                    {regalo && accesoriosRegalables.length > 0 && (
-                                        <div className="ryuu-regalo-lista">
-                                            {accesoriosRegalables.map((a, i) => (
-                                                <label key={i} className="ryuu-checkbox-row ryuu-regalo-item">
-                                                    <input type="checkbox" className="ryuu-checkbox" checked={regaloAccIds.includes(String(a.id))} onChange={() => alternarRegalo(a.id)} />
-                                                    <span className="ryuu-regalo-item__nom">{a.nombre}</span>
-                                                    <span className="ryuu-regalo-item__meta">stock {a.stock} · {formatoCOP(a.costo)}</span>
-                                                </label>
-                                            ))}
-                                        </div>
-                                    )}
-                                    {regalo && regaloAccIds.length > 0 && (
-                                        <p className="ryuu-cell-muted" style={{ marginTop: '8px', fontSize: 13 }}>
-                                            Regalos: {regalosSeleccionados.map(a => a.nombre).join(', ')} · Total {formatoCOP(costoRegalos)}
-                                        </p>
-                                    )}
-                                    {regalo && accesoriosRegalables.length === 0 && (
-                                        <p className="ryuu-cell-muted" style={{ marginTop: '8px', fontSize: 13 }}>No hay accesorios con stock disponible para regalar.</p>
-                                    )}
-                                </div>
+                                {renderAccesoriosCart(true)}
                             </>
                         ) : (
-                            <div className="grid grid-cols-2 gap-3">
-                                <div className="ryuu-field">
-                                    <label className="ryuu-label">Accesorio</label>
-                                    <select value={productoId} onChange={e => { setProductoId(e.target.value); const a = accesorios.find(x => String(x.id) === e.target.value); setValorVenta(a ? a.precio_recomendado : ''); }} required className="ryuu-select">
-                                        <option value="">-- Elige --</option>
-                                        {accesorios.map((a, i) => (
-                                            <option key={i} value={a.id}>{a.nombre} (stock: {a.stock})</option>
-                                        ))}
-                                    </select>
-                                </div>
-                                <div className="ryuu-field">
-                                    <label className="ryuu-label">Cantidad</label>
-                                    <input type="number" min="1" value={cantidad} onChange={e => setCantidad(e.target.value)} className="ryuu-input" />
-                                </div>
-                            </div>
-                            )
-                        ) : esReventa ? (
+                            renderAccesoriosCart(false)
+                        )) : esReventa ? (
                             <>
                                 <div className="ryuu-field">
                                     <label className="ryuu-label">Descripción del Producto</label>
@@ -3235,6 +3552,7 @@
                                         <span className={gananciaReventa >= 0 ? 'ryuu-sum-util' : 'ryuu-sum-pierda'}>Ganancia estimada: {formatoCOP(gananciaReventa)}</span>
                                     </div>
                                 )}
+                                {renderAccesoriosCart(true)}
                                 <div className="ryuu-field">
                                     <label className="ryuu-label">Nombre del Cliente (opcional)</label>
                                     <input type="text" value={cliente} onChange={e => setCliente(e.target.value)} placeholder="Nombre o Cédula" className="ryuu-input" />
@@ -3306,11 +3624,23 @@
 
                         {esVentaStock && (
                             <>
-                                <div className="grid grid-cols-2 gap-3">
-                                    <div className="ryuu-field">
-                                        <label className="ryuu-label">Precio de Venta (COP)</label>
-                                        <input type="number" value={valorVenta} onChange={e => setValorVenta(e.target.value)} required className="ryuu-input ryuu-num-input" />
+                                {tipo === 'celular' ? (
+                                    <div className="grid grid-cols-2 gap-3">
+                                        <div className="ryuu-field">
+                                            <label className="ryuu-label">Precio de Venta (COP)</label>
+                                            <input type="number" value={valorVenta} onChange={e => setValorVenta(e.target.value)} required className="ryuu-input ryuu-num-input" />
+                                        </div>
+                                        <div className="ryuu-field">
+                                            <label className="ryuu-label">Medio de Pago</label>
+                                            <select value={metodoPago} onChange={e => setMetodoPago(e.target.value)} className="ryuu-select">
+                                                <option value="Efectivo">Efectivo</option>
+                                                <option value="Nequi">Nequi</option>
+                                                <option value="Tarjeta">Tarjeta</option>
+                                                <option value="Addi">Addi</option>
+                                            </select>
+                                        </div>
                                     </div>
+                                ) : (
                                     <div className="ryuu-field">
                                         <label className="ryuu-label">Medio de Pago</label>
                                         <select value={metodoPago} onChange={e => setMetodoPago(e.target.value)} className="ryuu-select">
@@ -3320,13 +3650,20 @@
                                             <option value="Addi">Addi</option>
                                         </select>
                                     </div>
-                                </div>
+                                )}
 
-                                {valorVenta && (
+                                {tipo === 'celular' && valorVenta && (
                                     <div className="ryuu-selling__summary">
                                         <span>Costo: <strong>{formatoCOP(costoTotal)}</strong></span>
-                                        {regalosSeleccionados.length > 0 && <span className="ryuu-sum-item">Regalos: {regalosSeleccionados.map(a => `${a.nombre} (−${formatoCOP(a.costo)})`).join(', ')}</span>}
+                                        {accItems.length > 0 && <span className="ryuu-sum-item">Accesorios: venta {formatoCOP(accItemsVenta)} · costo {formatoCOP(accItemsCosto)}</span>}
                                         <span className="ryuu-sum-util">Utilidad Est.: {formatoCOP(gananciaEst)}</span>
+                                    </div>
+                                )}
+                                {tipo === 'accesorio' && accItems.length > 0 && (
+                                    <div className="ryuu-selling__summary">
+                                        <span>Costo: <strong>{formatoCOP(accItemsCosto)}</strong></span>
+                                        <span>Venta: <strong>{formatoCOP(accItemsVenta)}</strong></span>
+                                        <span className="ryuu-sum-util">Utilidad Est.: {formatoCOP(accItemsVenta - accItemsCosto)}</span>
                                     </div>
                                 )}
 

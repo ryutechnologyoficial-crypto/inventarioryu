@@ -169,7 +169,7 @@ function initSheets(ss) {
     'ReferenciaRetoma': ['id', 'modelo_id', 'capacidad', 'grado', 'precio_compra_usd', 'precio_compra_cop', 'precio_venta_usd', 'precio_venta_cop', 'actualizado_en'],
     'UnidadesCelular': ['id', 'modelo_id', 'imei', 'capacidad', 'grado', 'costo_real', 'precio_venta_real', 'fecha_ingreso', 'estado', 'color'],
     'Accesorios': ['id', 'nombre', 'costo', 'precio_recomendado', 'stock', 'actualizado_en'],
-    'Ventas': ['id', 'numero_correlativo', 'fecha_hora', 'vendedor_id', 'tipo_producto', 'unidad_id', 'producto_id', 'imei', 'nombre_cliente', 'nota', 'metodo_pago', 'cantidad', 'valor_venta', 'costo_total', 'ganancia', 'creado_en', 'regalo_accesorio_id', 'editado', 'editado_en'],
+    'Ventas': ['id', 'numero_correlativo', 'fecha_hora', 'vendedor_id', 'tipo_producto', 'unidad_id', 'producto_id', 'imei', 'nombre_cliente', 'nota', 'metodo_pago', 'cantidad', 'valor_venta', 'costo_total', 'ganancia', 'creado_en', 'regalo_accesorio_id', 'editado', 'editado_en', 'items_detalle'],
     'HistorialIMEI': ['fecha_hora', 'imei', 'accion', 'usuario_id', 'detalle'],
     'Perdidas': ['id', 'fecha_hora', 'tipo', 'accesorio_id', 'concepto', 'costo', 'usuario_id', 'detalle'],
     'Vales': ['id', 'fecha_hora', 'concepto', 'monto', 'categoria', 'nota', 'usuario_id', 'creado_en']
@@ -525,6 +525,40 @@ function loginUser(ss, email, password) {
   return { id: user.id, email: user.email, nombre: user.nombre, rol: user.rol };
 }
 
+// Normaliza la lista de accesorios de una venta. Acepta un array en params.items
+// o, por compatibilidad con clientes viejos, un único producto_id/cantidad.
+function normalizarItemsAccesorios(params) {
+  let raw = params.items;
+  if (typeof raw === 'string') {
+    try { raw = JSON.parse(raw); } catch (e) { raw = []; }
+  }
+  const lista = [];
+  if (Array.isArray(raw)) {
+    raw.forEach(it => {
+      if (!it) return;
+      const id = String(it.producto_id || it.id || '').trim();
+      if (!id) return;
+      lista.push({
+        producto_id: id,
+        cantidad: Math.max(1, Number(it.cantidad) || 1),
+        precio_unit: (it.precio_unit === undefined || it.precio_unit === null || it.precio_unit === '')
+          ? undefined
+          : Number(it.precio_unit),
+        regalo: it.regalo === true || it.regalo === 'true'
+      });
+    });
+  }
+  if (!lista.length && params.tipo_producto === 'accesorio' && params.producto_id) {
+    lista.push({
+      producto_id: String(params.producto_id).trim(),
+      cantidad: Math.max(1, Number(params.cantidad) || 1),
+      precio_unit: (params.valor_venta === undefined || params.valor_venta === '') ? undefined : Number(params.valor_venta),
+      regalo: false
+    });
+  }
+  return lista;
+}
+
 function registrarVenta(ss, params) {
   const sheet = ss.getSheetByName('Ventas');
   const unidadesSheet = ss.getSheetByName('UnidadesCelular');
@@ -535,38 +569,93 @@ function registrarVenta(ss, params) {
   const correlativo = nuevoId;
   const fechaHora = new Date().toISOString();
 
+  let celularRowIndex = -1;
   if (params.tipo_producto === 'celular') {
     const rows = unidadesSheet.getDataRange().getValues();
-    let rowIndex = -1;
     for (let i = 1; i < rows.length; i++) {
       if (String(rows[i][0]) === String(params.unidad_id)) {
-        rowIndex = i + 1;
+        celularRowIndex = i + 1;
         if (rows[i][8] === 'vendido') {
           throw new Error('Este celular ya fue vendido por otro usuario en este mismo instante.');
         }
         break;
       }
     }
-    if (rowIndex === -1) throw new Error('Celular no encontrado en inventario');
-    unidadesSheet.getRange(rowIndex, 9).setValue('vendido');
-  } else if (params.tipo_producto === 'accesorio') {
-    const rows = accSheet.getDataRange().getValues();
-    let rowIndex = -1;
-    let currentStock = 0;
-    for (let i = 1; i < rows.length; i++) {
-      if (String(rows[i][0]) === String(params.producto_id)) {
-        rowIndex = i + 1;
-        currentStock = Number(rows[i][4]);
-        break;
+    if (celularRowIndex === -1) throw new Error('Celular no encontrado en inventario');
+  }
+
+  // --- Accesorios del inventario (uno o varios) y/o regalos ---
+  // Sirve tanto para ventas de accesorio como para reventas que agregan accesorios.
+  const itemsAcc = normalizarItemsAccesorios(params);
+  const itemsDetalle = [];
+  let itemsVenta = 0;
+  let itemsCosto = 0;
+
+  if (itemsAcc.length) {
+    const accRows = accSheet.getDataRange().getValues();
+    const filaPorId = {};
+    for (let i = 1; i < accRows.length; i++) filaPorId[String(accRows[i][0])] = i + 1;
+
+    // Valida todo antes de descontar, para no dejar el stock a medias.
+    for (const it of itemsAcc) {
+      const fila = filaPorId[it.producto_id];
+      if (!fila) throw new Error('Accesorio no encontrado: ' + it.producto_id);
+      const stock = Number(accRows[fila - 1][4] || 0);
+      if (stock < it.cantidad) {
+        throw new Error('Stock insuficiente de "' + accRows[fila - 1][1] + '". Quedan ' + stock + '.');
       }
     }
-    if (rowIndex === -1) throw new Error('Accesorio no encontrado');
-    const cantidad = Number(params.cantidad) || 1;
-    if (currentStock < cantidad) {
-      throw new Error('Stock insuficiente. Quedan ' + currentStock + ' unidades.');
+
+    for (const it of itemsAcc) {
+      const fila = filaPorId[it.producto_id];
+      const nombre = String(accRows[fila - 1][1]);
+      const costoUnit = Number(accRows[fila - 1][2] || 0);
+      const stock = Number(accRows[fila - 1][4] || 0);
+      const precioUnit = (it.precio_unit === undefined || it.precio_unit === null)
+        ? Number(accRows[fila - 1][3] || 0)
+        : Number(it.precio_unit);
+
+      accSheet.getRange(fila, 5).setValue(stock - it.cantidad);
+      accSheet.getRange(fila, 6).setValue(fechaHora);
+
+      itemsCosto += costoUnit * it.cantidad;
+      if (!it.regalo) itemsVenta += precioUnit * it.cantidad;
+      itemsDetalle.push({
+        id: it.producto_id,
+        nombre: nombre,
+        cantidad: it.cantidad,
+        precio_unit: precioUnit,
+        costo_unit: costoUnit,
+        regalo: !!it.regalo
+      });
     }
-    accSheet.getRange(rowIndex, 5).setValue(currentStock - cantidad);
-    accSheet.getRange(rowIndex, 6).setValue(fechaHora);
+  }
+
+  if (params.tipo_producto === 'accesorio') {
+    if (!itemsDetalle.length) throw new Error('Agrega al menos un accesorio.');
+    const vendidos = itemsDetalle.filter(d => !d.regalo);
+    params.producto_id = vendidos.length === 1
+      ? vendidos[0].id
+      : (vendidos.map(d => d.id).join(',') || itemsDetalle[0].id);
+    params.cantidad = itemsDetalle.reduce((s, d) => s + d.cantidad, 0);
+    params.valor_venta = itemsVenta;
+    params.costo_total = itemsCosto;
+    params.items_detalle = JSON.stringify(itemsDetalle);
+    const desc = itemsDetalle.map(d => d.nombre + (d.cantidad > 1 ? ' x' + d.cantidad : '') + (d.regalo ? ' (regalo)' : '')).join(', ');
+    params.nota = params.nota ? params.nota + ' | ' + desc : desc;
+  } else if (params.tipo_producto === 'reventa' && itemsDetalle.length) {
+    params.valor_venta = (Number(params.valor_venta) || 0) + itemsVenta;
+    params.costo_total = (Number(params.costo_total) || 0) + itemsCosto;
+    params.items_detalle = JSON.stringify(itemsDetalle);
+    const desc = itemsDetalle.map(d => d.nombre + (d.cantidad > 1 ? ' x' + d.cantidad : '') + (d.regalo ? ' (regalo)' : '')).join(', ');
+    params.nota = params.nota ? params.nota + ' | Accesorios: ' + desc : 'Accesorios: ' + desc;
+  } else if (params.tipo_producto === 'celular' && itemsDetalle.length) {
+    // Accesorios (cobrados o de regalo) agregados a la venta de un celular.
+    params.valor_venta = (Number(params.valor_venta) || 0) + itemsVenta;
+    params.costo_total = (Number(params.costo_total) || 0) + itemsCosto;
+    params.items_detalle = JSON.stringify(itemsDetalle);
+    const desc = itemsDetalle.map(d => d.nombre + (d.cantidad > 1 ? ' x' + d.cantidad : '') + (d.regalo ? ' (regalo)' : '')).join(', ');
+    params.nota = params.nota ? params.nota + ' | Accesorios: ' + desc : 'Accesorios: ' + desc;
   }
 
   let costoTotal = Number(params.costo_total) || 0;
@@ -610,6 +699,12 @@ function registrarVenta(ss, params) {
   const valorVenta = Number(params.valor_venta) || 0;
   const ganancia = Number((valorVenta - costoTotal).toFixed(2));
 
+  // Marca el celular como vendido solo cuando ya pasaron todas las validaciones,
+  // para no dejarlo bloqueado si algo falla (ej. stock insuficiente de un accesorio).
+  if (celularRowIndex !== -1) {
+    unidadesSheet.getRange(celularRowIndex, 9).setValue('vendido');
+  }
+
   sheet.appendRow([
     nuevoId,
     correlativo,
@@ -629,7 +724,8 @@ function registrarVenta(ss, params) {
     fechaHora,
     regaloId || '',
     '',
-    ''
+    '',
+    params.items_detalle || ''
   ]);
 
   if (params.tipo_producto === 'celular') {
@@ -722,6 +818,31 @@ function anularVenta(ss, ventaId, userId) {
         break;
       }
     }
+  }
+
+  // Devuelve al stock los accesorios de la venta, incluidos los regalos.
+  let itemsRestaurar = [];
+  if (venta.items_detalle) {
+    try {
+      const parsed = JSON.parse(venta.items_detalle);
+      if (Array.isArray(parsed)) itemsRestaurar = parsed;
+    } catch (e) {
+      itemsRestaurar = [];
+    }
+  }
+
+  if (itemsRestaurar.length) {
+    const accSheet = ss.getSheetByName('Accesorios');
+    const aRows = accSheet.getDataRange().getValues();
+    itemsRestaurar.forEach(d => {
+      if (!d || !d.id) return;
+      for (let i = 1; i < aRows.length; i++) {
+        if (String(aRows[i][0]) === String(d.id)) {
+          accSheet.getRange(i + 1, 5).setValue(Number(aRows[i][4]) + Number(d.cantidad || 0));
+          break;
+        }
+      }
+    });
   } else if (venta.tipo_producto === 'accesorio' && venta.producto_id) {
     const accSheet = ss.getSheetByName('Accesorios');
     const aRows = accSheet.getDataRange().getValues();
