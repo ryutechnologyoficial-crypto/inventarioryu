@@ -13,6 +13,8 @@
     <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
     <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
         <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.8.2/jspdf.plugin.autotable.min.js"></script>
     <style>
         body { background-color: #f5f5f5; color: #111111; font-family: system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; }
 
@@ -1273,6 +1275,23 @@
             return new Intl.NumberFormat('es-CO', { style: 'currency', currency: 'COP', maximumFractionDigits: 0 }).format(valor);
         };
 
+        // ==========================================================
+        // DATOS DEL NEGOCIO PARA LA FACTURA  (EDITA AQUÍ TUS DATOS)
+        // ==========================================================
+        const FACTURA_NEGOCIO = {
+            nombre: 'RYU Technology',
+            logo: 'logo.png',
+            direccion: 'Centro Comercial Shangai, Local 1244',
+            ciudad: '',
+            telefono: 'Tel. 300 000 0000',
+            correo: 'correo@tutienda.com',
+            leyenda: '¡Gracias por su compra!'
+        };
+
+        // Logo (logo.png) incrustado en la factura para que siempre se genere,
+        // sin depender de rutas, servidor o internet.
+        const FACTURA_LOGO_B64 = 'data:image/jpeg;base64,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';
+
         // Lee la sesión guardada, pero solo la acepta si tiene un id válido,
         // para evitar llamadas automáticas al backend sin autenticación real.
         // Cada navegador/dispositivo maneja su propia sesión local: puede venir
@@ -1534,11 +1553,11 @@
                         </header>
                     )}
 
-                        {tab === 'resumen' && <VistaResumen ventas={ventas} unidades={unidades} modelos={modelos} accesorios={accesorios} esAdmin={esAdmin} callGAS={callGAS} onUpdate={loadAllData} />}
+                        {tab === 'resumen' && <VistaResumen ventas={ventas} unidades={unidades} modelos={modelos} accesorios={accesorios} usuarios={usuarios} esAdmin={esAdmin} callGAS={callGAS} onUpdate={loadAllData} />}
                         {tab === 'registrar' && <VistaVender session={session} callGAS={callGAS} unidades={unidades} accesorios={accesorios} soportaItems={soportaItems} onComplete={() => { loadAllData(); setTab('resumen'); }} />}
                         {tab === 'celulares' && <VistaCelulares unidades={unidades} modelos={modelos} esAdmin={esAdmin} callGAS={callGAS} onUpdate={loadAllData} />}
                         {tab === 'accesorios' && <VistaAccesorios accesorios={accesorios} esAdmin={esAdmin} callGAS={callGAS} onUpdate={loadAllData} />}
-                        {tab === 'ventas' && <VistaVentas ventas={ventas} unidades={unidades} modelos={modelos} accesorios={accesorios} esAdmin={esAdmin} callGAS={callGAS} onUpdate={loadAllData} />}
+                        {tab === 'ventas' && <VistaVentas ventas={ventas} unidades={unidades} modelos={modelos} accesorios={accesorios} usuarios={usuarios} esAdmin={esAdmin} callGAS={callGAS} onUpdate={loadAllData} />}
                         {tab === 'retoma' && <VistaRetoma retomas={retomas} modelos={modelos} esAdmin={esAdmin} callGAS={callGAS} onUpdate={loadAllData} />}
                         {tab === 'config' && esAdmin && <VistaConfig configuracion={configuracion} modelos={modelos} retomas={retomas} callGAS={callGAS} onUpdate={loadAllData} />}
                         {tab === 'empleados' && esAdmin && <VistaEmpleados usuarios={usuarios} callGAS={callGAS} onUpdate={loadAllData} />}
@@ -2257,7 +2276,7 @@
         // ==========================================
         // VISTA 1: RESUMEN Y DASHBOARD
         // ==========================================
-        function PanelHistorialVentas({ ventas, unidades = [], modelos = [], accesorios, esAdmin, callGAS, onUpdate }) {
+        function PanelHistorialVentas({ ventas, unidades = [], modelos = [], accesorios, usuarios = [], esAdmin, callGAS, onUpdate }) {
             const [editTarget, setEditTarget] = useState(null);
             const [editValor, setEditValor] = useState('');
             const [editCosto, setEditCosto] = useState('');
@@ -2486,6 +2505,156 @@
                 }
             };
 
+            const nombreVendedor = (id) => {
+                if (!id) return '—';
+                const u = usuarios.find(x => String(x.id) === String(id));
+                return u ? (u.nombre || u.email || String(id)) : String(id);
+            };
+
+            // Filas de la factura, una por producto vendido (con cantidad y unidades).
+            const filasFactura = (gr) => {
+                const filas = [];
+                gr.ventas.forEach(v => {
+                    const detGuardado = itemsDetalleVenta(v);
+                    const tieneItems = detGuardado.length > 0;
+                    const det = tieneItems
+                        ? detGuardado
+                        : regalosLegacyVenta(v).map(g => ({ nombre: g.nombre, cantidad: 1, precio_unit: 0, costo_unit: g.costo, regalo: true }));
+                    const valItem = (d) => d.regalo ? 0 : Number(d.precio_unit || 0) * Number(d.cantidad || 1);
+                    const costoItem = (d) => Number(d.costo_unit || 0) * Number(d.cantidad || 1);
+                    const sumVenta = det.reduce((s, d) => s + valItem(d), 0);
+                    const sumCosto = det.reduce((s, d) => s + costoItem(d), 0);
+                    const push = (desc, nc, total, costo) => {
+                        const cant = Number(nc) || 1;
+                        filas.push({
+                            desc: desc,
+                            cant: cant,
+                            unitario: cant ? total / cant : 0,
+                            total: Number(total) || 0,
+                            costo: Number(costo) || 0,
+                            ganancia: (Number(total) || 0) - (Number(costo) || 0)
+                        });
+                    };
+                    if (v.tipo_producto === 'celular') {
+                        push(nombreCelular(v) || 'Celular', 1, Number(v.valor_venta || 0) - sumVenta, Number(v.costo_total || 0) - sumCosto);
+                    } else if (v.tipo_producto === 'reventa') {
+                        push('Reventa: ' + (notaLimpia(v) || 'Producto'), Number(v.cantidad || 1), Number(v.valor_venta || 0) - sumVenta, Number(v.costo_total || 0) - sumCosto);
+                    } else if (v.tipo_producto === 'servicio') {
+                        push('Servicio técnico: ' + (notaLimpia(v) || 'Reparación'), 1, Number(v.valor_venta || 0) - sumVenta, Number(v.costo_total || 0) - sumCosto);
+                    } else if (v.tipo_producto === 'vale') {
+                        push('Vale: ' + (v.producto_id || ''), 1, Number(v.valor_venta || 0), Number(v.costo_total || 0));
+                    } else if (v.tipo_producto === 'accesorio' && !tieneItems) {
+                        push(nombreAcc(v.producto_id), Number(v.cantidad || 1), Number(v.valor_venta || 0) - sumVenta, Number(v.costo_total || 0) - sumCosto);
+                    }
+                    det.forEach(d => {
+                        push(d.nombre + (d.regalo ? ' (regalo)' : ''), Number(d.cantidad || 1), valItem(d), costoItem(d));
+                    });
+                });
+                return filas;
+            };
+
+            const generarFactura = (gr) => {
+                try {
+                    if (!window.jspdf || !window.jspdf.jsPDF) { alert('El generador de PDF no está cargado. Revisa la conexión a internet.'); return; }
+                    const filas = filasFactura(gr);
+                    const v = gr.principal;
+                    const totalVenta = filas.reduce((s, f) => s + f.total, 0);
+                    const n = FACTURA_NEGOCIO;
+                    const cop = (x) => '$' + Math.round(Number(x) || 0).toLocaleString('es-CO');
+
+                    // Logo de la tienda incrustado (siempre disponible en la factura).
+                    const logoImg = FACTURA_LOGO_B64;
+
+                    const { jsPDF } = window.jspdf;
+                    const doc = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' });
+
+                    doc.setFillColor(13, 13, 13);
+                    doc.rect(0, 0, 210, 34, 'F');
+
+                    let x = 14;
+                    if (logoImg) {
+                        try { doc.addImage(logoImg, 'JPEG', 14, 11.3, 20, 11.3); } catch (e) { /* sin logo si falla */ }
+                        x = 40;
+                    }
+                    doc.setTextColor(212, 175, 55);
+                    doc.setFont('helvetica', 'bold');
+                    doc.setFontSize(17);
+                    doc.text(n.nombre, x, 16);
+                    doc.setFontSize(9);
+                    doc.setTextColor(220, 220, 220);
+                    doc.setFont('helvetica', 'normal');
+                    let yTop = 23;
+                    const lineDir = n.direccion + (n.ciudad ? ' · ' + n.ciudad : '');
+                    if (lineDir) { doc.text(lineDir, x, yTop); yTop += 5; }
+                    const lineContacto = (n.telefono ? n.telefono : '') + (n.correo ? (n.telefono ? ' · ' : '') + n.correo : '');
+                    if (lineContacto) doc.text(lineContacto, x, yTop);
+
+                    doc.setFont('helvetica', 'bold');
+                    doc.setFontSize(14);
+                    doc.setTextColor(212, 175, 55);
+                    doc.text('FACTURA DE VENTA', 196, 16, { align: 'right' });
+                    doc.setFontSize(10);
+                    doc.setTextColor(255, 255, 255);
+                    doc.text('N° ' + (v.numero_correlativo || v.id), 196, 22, { align: 'right' });
+                    doc.setFont('helvetica', 'normal');
+                    doc.setFontSize(8.5);
+                    doc.setTextColor(220, 220, 220);
+                    doc.text('Fecha: ' + fmtFecha(v.fecha_hora), 196, 28, { align: 'right' });
+                    doc.text('Vendedor: ' + nombreVendedor(v.vendedor_id), 196, 33, { align: 'right' });
+
+                    let y = 44;
+                    doc.setFont('helvetica', 'bold');
+                    doc.setFontSize(11);
+                    doc.setTextColor(17, 24, 39);
+                    doc.text('Datos del cliente', 14, y);
+                    doc.setFont('helvetica', 'normal');
+                    doc.setFontSize(9.5);
+                    doc.setTextColor(55, 65, 81);
+                    doc.text('Cliente: ' + (v.tipo_producto === 'vale' ? (v.producto_id || '—') : (v.nombre_cliente || '—')), 14, y + 6);
+                    doc.text('Método de pago: ' + (v.metodo_pago || '—'), 14, y + 12);
+
+                    doc.autoTable({
+                        startY: y + 18,
+                        margin: { left: 14, right: 14 },
+                        head: [['#', 'Descripción', 'Cant.', 'V. Unitario', 'Total']],
+                        body: filas.map((f, i) => [String(i + 1), f.desc, String(f.cant), cop(f.unitario), cop(f.total)]),
+                        styles: { fontSize: 8, cellPadding: 1.8, textColor: [31, 41, 55] },
+                        headStyles: { fillColor: [212, 175, 55], textColor: [17, 24, 39], fontStyle: 'bold', fontSize: 8 },
+                        alternateRowStyles: { fillColor: [245, 245, 245] },
+                        theme: 'grid',
+                        columnStyles: {
+                            2: { halign: 'center', cellWidth: 18 },
+                            3: { halign: 'right', cellWidth: 40 },
+                            4: { halign: 'right', cellWidth: 40 }
+                        }
+                    });
+                    y = doc.lastAutoTable.finalY + 6;
+
+                    doc.setFont('helvetica', 'bold');
+                    doc.setDrawColor(212, 175, 55);
+                    doc.setLineWidth(0.6);
+                    doc.line(14, y, 196, y);
+                    y += 6;
+                    doc.setFontSize(10);
+                    doc.setTextColor(17, 24, 39);
+                    doc.text('Total de la venta:', 140, y);
+                    doc.text(cop(totalVenta), 196, y, { align: 'right' });
+
+                    if (n.leyenda) {
+                        y += 12;
+                        doc.setFont('helvetica', 'italic');
+                        doc.setFontSize(9);
+                        doc.setTextColor(107, 114, 128);
+                        doc.text(n.leyenda, 14, y);
+                    }
+
+                    doc.save('Factura-' + (v.numero_correlativo || v.id) + '.pdf');
+                } catch (err) {
+                    alert('No se pudo generar la factura: ' + err.message);
+                    console.error(err);
+                }
+            };
+
             return (
                 <>
                     <div className="ryuu-card ryuu-panel">
@@ -2558,12 +2727,15 @@
                                                                 })()}
                                                             </td>
                                                             <td rowSpan={rowCount} className="ryuu-tright">
-                                                                {esAdmin && (
-                                                                    <div className="flex items-center gap-2 justify-end">
-                                                                        <button onClick={() => abrirEditar(v)} className="ryuu-btn ryuu-btn--xs ryuu-btn--edit">Editar</button>
-                                                                        <button onClick={() => pedirEliminar(gr)} className="ryuu-btn ryuu-btn--xs ryuu-btn--danger">Eliminar</button>
-                                                                    </div>
-                                                                )}
+                                                                <div className="flex items-center gap-2 justify-end">
+                                                                    <button onClick={() => generarFactura(gr)} className="ryuu-btn ryuu-btn--xs ryuu-btn--edit" title="Descargar factura en PDF">Factura</button>
+                                                                    {esAdmin && (
+                                                                        <>
+                                                                            <button onClick={() => abrirEditar(v)} className="ryuu-btn ryuu-btn--xs ryuu-btn--edit">Editar</button>
+                                                                            <button onClick={() => pedirEliminar(gr)} className="ryuu-btn ryuu-btn--xs ryuu-btn--danger">Eliminar</button>
+                                                                        </>
+                                                                    )}
+                                                                </div>
                                                             </td>
                                                         </>
                                                     )}
@@ -2635,7 +2807,7 @@
             );
         }
 
-        function VistaResumen({ ventas, unidades, modelos, accesorios, esAdmin, callGAS, onUpdate }) {
+        function VistaResumen({ ventas, unidades, modelos, accesorios, usuarios, esAdmin, callGAS, onUpdate }) {
             const hoy = new Date().toISOString().split('T')[0];
             const mesActual = hoy.substring(0, 7);
 
@@ -2677,7 +2849,11 @@
                 setRegalosLoading(true);
                 try {
                     const data = await callGAS('getRegalosDelMes');
-                    setRegalosData(data);
+                    // Normaliza la respuesta para que funcione aunque el backend
+                    // viejo no devuelva detalle cargado de regalos.
+                    const detalle = data && Array.isArray(data.detalle) ? data.detalle : [];
+                    const total = data ? (Number(data.total) || 0) : 0;
+                    setRegalosData({ detalle: detalle, total: total });
                 } catch (err) {
                     console.error("Error cargando regalos del mes:", err);
                 } finally {
@@ -2722,7 +2898,7 @@
                         <CardStat title="Utilidad del Mes" value={formatoCOP(gananciaMes)} sub="Ganancia neta mes" icon="meta" tone="violet" />
                     </div>
 
-                    <PanelHistorialVentas ventas={ventas} unidades={unidades} modelos={modelos} accesorios={accesorios} esAdmin={esAdmin} callGAS={callGAS} onUpdate={onUpdate} />
+                    <PanelHistorialVentas ventas={ventas} unidades={unidades} modelos={modelos} accesorios={accesorios} usuarios={usuarios} esAdmin={esAdmin} callGAS={callGAS} onUpdate={onUpdate} />
 
                     <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
                                                 <div className="ryuu-card ryuu-panel">
@@ -2793,7 +2969,7 @@
                                 <RYUIcon name="ventas" className="ryuu-panel__ico" />
                                 Pérdida por Regalos (mes)
                             </span>
-                            <span className="ryuu-pill ryuu-pill--gold">{regalosData ? regalosData.detalle.length : 0} regalo(s)</span>
+                            <span className="ryuu-pill ryuu-pill--gold">{regalosData && Array.isArray(regalosData.detalle) ? regalosData.detalle.length : 0} regalo(s)</span>
                         </div>
 
                         <details className="ryuu-details">
@@ -2835,7 +3011,7 @@
 
                         {regalosLoading ? (
                             <p className="ryuu-cell-muted">Cargando…</p>
-                        ) : regalosData && regalosData.total > 0 ? (
+                        ) : regalosData && Array.isArray(regalosData.detalle) && regalosData.detalle.length && Number(regalosData.total) > 0 ? (
                             <>
                                 <div className="ryuu-regalo-total">{formatoCOP(regalosData.total)}</div>
                                 <details className="ryuu-details">
@@ -2877,7 +3053,7 @@
         // ==========================================
         // VISTA 1.5: VENTAS E INDICADORES
         // ==========================================
-        function VistaVentas({ ventas, unidades, modelos, accesorios, esAdmin, callGAS, onUpdate }) {
+        function VistaVentas({ ventas, unidades, modelos, accesorios, usuarios = [], esAdmin, callGAS, onUpdate }) {
             const [rango, setRango] = useState('mes');
             const margenRef = useRef(null);
             const ventasRef = useRef(null);
@@ -3131,7 +3307,7 @@
                         </div>
                     </div>
 
-                    <PanelHistorialVentas ventas={ventas} unidades={unidades} modelos={modelos} accesorios={accesorios} esAdmin={esAdmin} callGAS={callGAS} onUpdate={onUpdate} />
+                    <PanelHistorialVentas ventas={ventas} unidades={unidades} modelos={modelos} accesorios={accesorios} usuarios={usuarios} esAdmin={esAdmin} callGAS={callGAS} onUpdate={onUpdate} />
                 </div>
             );
         }
